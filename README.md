@@ -41,14 +41,14 @@ python spotify-ad-mute.py
 
 Behaviour is controlled by two toggles at the top of the script (see [Configuration](#configuration) below).
 
-### With menu enabled (`USE_MENU = True`)
+### With menu enabled (`USE_MENU = True`, default)
 
 1. Run the script.
 2. Select **Run** using the arrow keys and press `Enter` — the muter starts in the background.
 3. Select **Stop** to stop and exit.
 4. Select **Diagnose** to run a one-shot check (see [Diagnosing issues](#diagnosing-issues)).
 
-### Without menu (`USE_MENU = False`, default)
+### Without menu (`USE_MENU = False`)
 
 The muter starts immediately on launch. Press `Ctrl+C` to stop.
 Recommended when you want clean log output for debugging.
@@ -62,7 +62,7 @@ Open `spotify-ad-mute.py` and adjust these flags near the top of the file:
 ```python
 # Set to True to show the interactive pick menu (Run / Stop / Diagnose).
 # Set to False to start the muter immediately without any UI.
-USE_MENU = False
+USE_MENU = True
 
 # Set to True to enable verbose DEBUG-level logging.
 # Useful for diagnosing image detection and mute state issues.
