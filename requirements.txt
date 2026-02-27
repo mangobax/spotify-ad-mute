@@ -1,0 +1,6 @@
+pyautogui
+pyscreeze
+Pillow
+opencv-python
+pick
+pycaw
