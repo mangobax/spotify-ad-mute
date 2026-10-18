@@ -207,9 +207,19 @@ class AutoPlay:
         return 'played'
 
 
-def window_is_hung(hwnd: int) -> bool:
-    """True when the window's thread has not processed messages for several seconds (Task Manager: 'Not responding')."""
-    return bool(ctypes.windll.user32.IsHungAppWindow(hwnd))
+def window_is_hung(hwnd: int, timeout_ms: int = 2000) -> bool:
+    """True when the window does not answer a message within timeout_ms (Task Manager: 'Not responding').
+
+    IsHungAppWindow alone is not enough: an idle window whose process is frozen has no pending input and is
+    never flagged. Sending WM_NULL and waiting for the reply catches it. SMTO_ABORTIFHUNG makes an already
+    flagged window fail at once.
+    """
+    user32 = ctypes.windll.user32
+    if user32.IsHungAppWindow(hwnd):
+        return True
+    result = wintypes.LPARAM()
+    answered = user32.SendMessageTimeoutW(hwnd, 0, 0, 0, 0x0002, timeout_ms, ctypes.byref(result))  # WM_NULL, SMTO_ABORTIFHUNG
+    return not answered
 
 
 def kill_spotify():
