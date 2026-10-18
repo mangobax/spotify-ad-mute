@@ -235,8 +235,10 @@ class MuteAd(Thread):
                 log.debug("Scanning screen for ads... (muted=%s)", self._muted)
                 is_ad = check_for_ad(image_ads) is not None
 
-            # Sync internal state with what Spotify actually shows on screen (skipped when a track plays unmuted: nothing to fix)
-            if not self._detector or is_ad or self._muted:
+            # Sync internal state with what Spotify actually shows on screen (skipped when a track plays unmuted: nothing to fix).
+            # Not with pycaw: a Core Audio session mute does not change Spotify's own volume icon, so the screen would
+            # always say "unmuted" and undo our flag (the ad would be muted again every pass and never unmuted).
+            if not USE_PYCAW and (not self._detector or is_ad or self._muted):
                 screen_muted = is_muted_on_screen()
                 if screen_muted is not None and screen_muted != self._muted:
                     log.debug("Mute state corrected from screen: %s -> %s", self._muted, screen_muted)
