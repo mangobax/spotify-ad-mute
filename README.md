@@ -79,6 +79,25 @@ Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `-
 
 ---
 
+## Run at Windows start (NSSM)
+
+A service runs in Session 0 and cannot see the desktop, so the setup has two parts (run from an elevated shell, see `service/`):
+
+- a **logon task** (`SpotifyAdMute-Agent`) that runs `spotify-ad-mute.py --service` in the user's session, and
+- an **NSSM service** (`SpotifyAdMute`, delayed auto-start) that starts with Windows and keeps that task running.
+
+```
+service\install-service.ps1 -Nssm C:\tools\nssm.exe -Python C:\Python312\python.exe -User YourUser [-ImagesDir DIR] [-Pycaw on|off] [-DryRun]
+service\uninstall-service.ps1 -Nssm C:\tools\nssm.exe
+```
+
+Both are safe to run again. Prerequisites: NSSM, a Python with `requirements.txt` installed that SYSTEM can read, and
+**auto-logon with no screen saver or lock** (Sysinternals Autologon), since the agent reads the screen. The installer warns
+when auto-logon or the screen saver settings are wrong. Logs: `%LOCALAPPDATA%\spotify-ad-mute\agent.log` (agent) and
+`%ProgramData%\spotify-ad-mute\service.log` (service).
+
+---
+
 ## Configuration
 
 Open `spotify-ad-mute.py` and adjust these flags near the top of the file:
