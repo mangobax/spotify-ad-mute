@@ -17,8 +17,9 @@ try:
     from pyautogui import locateCenterOnScreen, click as pyautogui_click
     from pick import pick
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+    from ad_detect import AdDetector
     from supervisor import (Agent, AutoPlay, Supervisor, VolumeControlsGuard, ensure_maximized,
-                            kill_spotify, launch_spotify, window_is_hung)
+                            kill_spotify, launch_spotify, spotify_probe, window_is_hung, window_title)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
     raise details
@@ -212,12 +213,14 @@ class MuteAd(Thread):
     # How long to sleep between checks depending on ad state
     SLEEP_AD_ACTIVE  = 0.5   # seconds — poll quickly while ad is playing
     SLEEP_AD_IDLE    = 5.0   # seconds — poll slowly during normal playback
+    SLEEP_TITLE_IDLE = 2.0   # with title detection a pass is cheap, so react faster
 
-    def __init__(self):
+    def __init__(self, detector: AdDetector | None = None, use_images: bool = True):
         super().__init__(daemon=True)
         self.program_running = True
         self.running = False
         self._muted = False
+        self._detector, self._use_images = detector, use_images
 
     def run(self):
         while self.program_running:
@@ -225,16 +228,21 @@ class MuteAd(Thread):
                 time.sleep(0.2)
                 continue
 
-            log.debug("Scanning screen for ads... (muted=%s)", self._muted)
-            ad_pos = check_for_ad(image_ads)
+            if self._detector:
+                # Title + audio first; the image scan only runs when they cannot decide (and --detect allows it)
+                is_ad = self._detector.is_ad(self._muted, (lambda: check_for_ad(image_ads) is not None) if self._use_images else None)
+            else:
+                log.debug("Scanning screen for ads... (muted=%s)", self._muted)
+                is_ad = check_for_ad(image_ads) is not None
 
-            # Sync internal state with what Spotify actually shows on screen
-            screen_muted = is_muted_on_screen()
-            if screen_muted is not None and screen_muted != self._muted:
-                log.debug("Mute state corrected from screen: %s -> %s", self._muted, screen_muted)
-                self._muted = screen_muted
+            # Sync internal state with what Spotify actually shows on screen (skipped when a track plays unmuted: nothing to fix)
+            if not self._detector or is_ad or self._muted:
+                screen_muted = is_muted_on_screen()
+                if screen_muted is not None and screen_muted != self._muted:
+                    log.debug("Mute state corrected from screen: %s -> %s", self._muted, screen_muted)
+                    self._muted = screen_muted
 
-            if ad_pos is not None:
+            if is_ad:
                 # Ad is playing — mute if not already muted
                 if not self._muted:
                     log.info("Ad detected — muting Spotify")
@@ -248,7 +256,7 @@ class MuteAd(Thread):
                     log.info("Ad gone — unmuting Spotify")
                     if set_spotify_mute(False):
                         self._muted = False
-                time.sleep(self.SLEEP_AD_IDLE)
+                time.sleep(self.SLEEP_TITLE_IDLE if self._detector else self.SLEEP_AD_IDLE)
 
     def reset(self):
         """Forget the mute state (Spotify restarted: a new process starts unmuted)."""
@@ -325,6 +333,8 @@ def parse_args(argv=None):
                         help="no menu: launch/keep Spotify maximized with visible volume controls and mute ads")
     parser.add_argument('--no-autoplay', action='store_true', help="service mode: do not start playback when Spotify (re)starts")
     parser.add_argument('--images', type=Path, help="per-machine folder with volume/ and ads/ images")
+    parser.add_argument('--detect', choices=('both', 'title', 'images'), default='both',
+                        help="ad detection: window title + audio ('title'), screen images ('images'), or title first with images as fallback ('both', default)")
     parser.add_argument('--pycaw', choices=('on', 'off'), help="override USE_PYCAW")
     parser.add_argument('--log', type=Path, help="log file (service default: spotify-ad-mute/agent.log under LOCALAPPDATA)")
     return parser.parse_args(argv)
@@ -340,7 +350,10 @@ def main():
     if args.log or args.service:
         setup_file_logging(args.log or Path(os.environ['LOCALAPPDATA']) / 'spotify-ad-mute' / 'agent.log')
 
-    mute_ad = MuteAd()
+    detector = None
+    if args.detect != 'images':
+        detector = AdDetector(title=lambda: window_title(spotify_probe()[1] or 0) or None)
+    mute_ad = MuteAd(detector, use_images=args.detect != 'title')
     mute_ad.start()
 
     try:
