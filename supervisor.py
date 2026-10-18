@@ -41,9 +41,34 @@ def spotify_path(env=os.environ) -> Path:
     return Path(env['APPDATA']) / 'Spotify' / 'Spotify.exe'
 
 
+def spotify_registry_value(name: str):
+    """Value from the per-user Spotify uninstall key, or None."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Uninstall\Spotify') as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+
+
+def find_spotify(env=os.environ, registry=spotify_registry_value, exists=Path.exists) -> Path | None:
+    """Where Spotify.exe is installed: the registry entry first, then the default %APPDATA% location."""
+    candidates = []
+    if registry('InstallLocation'):
+        candidates.append(Path(registry('InstallLocation')) / 'Spotify.exe')
+    if registry('DisplayIcon'):
+        candidates.append(Path(registry('DisplayIcon').strip('"').rsplit(',', 1)[0].strip('"')))
+    if env.get('APPDATA'):
+        candidates.append(spotify_path(env))
+    return next((c for c in candidates if exists(c)), None)
+
+
 def launch_spotify(path: Path | None = None):
     """Start Spotify detached from this process. Run it in the user's session, not from a service."""
-    subprocess.Popen([str(path or spotify_path())], creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    path = path or find_spotify()
+    if path is None:
+        raise FileNotFoundError('Spotify.exe not found: is the desktop Spotify installed for this user?')
+    subprocess.Popen([str(path)], creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | NEW_PROCESS_GROUP
 
 
 # --- Maximized window ---
