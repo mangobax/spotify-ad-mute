@@ -29,7 +29,7 @@ if (-not $DryRun -and -not ([Security.Principal.WindowsPrincipal][Security.Princ
 # Service first, so the guard cannot start the task again while it is being removed
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Invoke-Step "Stop and remove service '$ServiceName'" {
-        & $Nssm stop $ServiceName 2>&1 | Out-Null
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue   # not "nssm stop": see install-service.ps1
         & $Nssm remove $ServiceName confirm | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "nssm remove failed with exit code $LASTEXITCODE" }
     }

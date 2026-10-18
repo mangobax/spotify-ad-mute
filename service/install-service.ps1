@@ -93,8 +93,8 @@ Invoke-Step "Register task '$TaskName' for $User : $Python $($agentArgs -join ' 
 
 # --- 2. NSSM service: starts with Windows, keeps the task alive ------------
 Invoke-Step "Create log folder $logDir" { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-$exists = $false
-if (-not $DryRun) { & $Nssm status $ServiceName *> $null; $exists = ($LASTEXITCODE -eq 0) }
+# Get-Service, not "nssm status": under -ErrorAction Stop, Windows PowerShell 5.1 turns nssm's stderr into an exception
+$exists = [bool](Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
 if ($exists) {
     Invoke-Step "Update service '$ServiceName'" {
         & $Nssm set $ServiceName Application $Python | Out-Null; Assert-ExitCode 'nssm set Application'
