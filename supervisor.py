@@ -153,6 +153,60 @@ class VolumeControlsGuard:
         return name
 
 
+# --- Playback ---
+
+def window_title(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(300)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, 300)
+    return buf.value
+
+
+def is_track_title(title: str) -> bool:
+    """While a track plays the title is 'Artist - Song'. Paused, idle and some ads show 'Spotify Free' or ad text."""
+    return ' - ' in title
+
+
+def send_play(hwnd: int):
+    """WM_APPCOMMAND / APPCOMMAND_MEDIA_PLAY straight to Spotify's window. Unlike the media key it is not a
+    toggle (playing stays playing), needs no focus and cannot reach another player."""
+    ctypes.windll.user32.SendMessageW(hwnd, 0x0319, hwnd, 46 << 16)
+
+
+class AutoPlay:
+    """tick(hwnd) returns 'idle' | 'waiting' | 'played' | 'playing' | 'gave-up'.
+
+    start() arms it (Spotify just came up). After `delay` seconds for the UI to load, PLAY is sent until a
+    track title shows, every `retry` seconds, at most `attempts` times. PLAY is idempotent, so a wrong
+    guess (for example an ad is playing) cannot pause anything.
+    """
+
+    def __init__(self, send_play=send_play, is_playing=lambda hwnd: is_track_title(window_title(hwnd)),
+                 now=time.monotonic, delay=6.0, retry=10.0, attempts=3):
+        self._send, self._is_playing, self._now = send_play, is_playing, now
+        self._delay, self._retry, self._attempts = delay, retry, attempts
+        self._pending = False
+
+    def start(self):
+        self._pending, self._since, self._last, self._tries = True, self._now(), None, 0
+
+    def tick(self, hwnd) -> str:
+        if not self._pending:
+            return 'idle'
+        if self._is_playing(hwnd):
+            self._pending = False
+            return 'playing'
+        now = self._now()
+        if now - self._since < self._delay or (self._last is not None and now - self._last < self._retry):
+            return 'waiting'
+        if self._tries >= self._attempts:
+            self._pending = False
+            return 'gave-up'
+        self._send(hwnd)
+        self._tries += 1
+        self._last = now
+        return 'played'
+
+
 class Supervisor:
     """tick() returns 'ok' | 'starting' | 'waiting' | 'launched'.
 
@@ -204,8 +258,9 @@ class Agent:
     A failing part is logged and skipped: the loop must outlive any single error.
     """
 
-    def __init__(self, supervisor, maximize, controls, on_new_generation, log):
+    def __init__(self, supervisor, maximize, controls, on_new_generation, log, autoplay=None):
         self._sup, self._maximize, self._controls = supervisor, maximize, controls
+        self._autoplay = autoplay
         self._on_new_generation, self._log = on_new_generation, log
         self._generation = 0
         self._last_status = None
@@ -227,9 +282,15 @@ class Agent:
         if self._sup.generation != self._generation:
             self._generation = self._sup.generation
             self._run('on_new_generation', self._on_new_generation, self._generation)
+            if self._autoplay:
+                self._run('autoplay start', self._autoplay.start)
         if self._run('maximize', self._maximize, hwnd) == 'maximized':
             self._log.info('Window was not maximized: maximized it')
         result = self._run('controls', self._controls, hwnd)
         if result not in (None, 'visible'):
             self._log.warning('Volume controls: %s', result)
+        if self._autoplay:
+            played = self._run('autoplay', self._autoplay.tick, hwnd)
+            if played in ('played', 'gave-up'):
+                self._log.info('Autoplay: %s', played)
         return status

@@ -17,7 +17,7 @@ try:
     from pyautogui import locateCenterOnScreen, click as pyautogui_click
     from pick import pick
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
-    from supervisor import (Agent, Supervisor, VolumeControlsGuard, ensure_maximized,
+    from supervisor import (Agent, AutoPlay, Supervisor, VolumeControlsGuard, ensure_maximized,
                             launch_spotify)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
@@ -299,11 +299,15 @@ def setup_file_logging(path: Path):
     logging.getLogger().addHandler(handler)
 
 
-def run_service(mute_ad: MuteAd):
-    """Keep Spotify running, maximized, with visible volume controls, while the muter watches for ads."""
+def run_service(mute_ad: MuteAd, autoplay: bool = True):
+    """Keep Spotify running, maximized, with visible volume controls, while the muter watches for ads.
+
+    With autoplay, playback is started whenever Spotify (re)starts.
+    """
     agent = Agent(Supervisor(launch=launch_spotify), maximize=ensure_maximized,
                   controls=VolumeControlsGuard(lambda: is_muted_on_screen() is not None).tick,
-                  on_new_generation=lambda gen: mute_ad.reset(), log=log)
+                  on_new_generation=lambda gen: mute_ad.reset(), log=log,
+                  autoplay=AutoPlay() if autoplay else None)
     mute_ad.running = True
     log.info("Service mode: supervising Spotify every %.0f s (mute method: %s)", SERVICE_TICK,
              "pycaw" if USE_PYCAW else "UI click")
@@ -318,6 +322,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Mute Spotify ads; optionally keep Spotify running.")
     parser.add_argument('--service', action='store_true',
                         help="no menu: launch/keep Spotify maximized with visible volume controls and mute ads")
+    parser.add_argument('--no-autoplay', action='store_true', help="service mode: do not start playback when Spotify (re)starts")
     parser.add_argument('--images', type=Path, help="per-machine folder with volume/ and ads/ images")
     parser.add_argument('--pycaw', choices=('on', 'off'), help="override USE_PYCAW")
     parser.add_argument('--log', type=Path, help="log file (service default: spotify-ad-mute/agent.log under LOCALAPPDATA)")
@@ -339,7 +344,7 @@ def main():
 
     try:
         if args.service:
-            run_service(mute_ad)
+            run_service(mute_ad, autoplay=not args.no_autoplay)
         elif USE_MENU:
             os.system('mode con cols=30 lines=7')
             while True:

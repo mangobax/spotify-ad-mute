@@ -58,7 +58,7 @@ Recommended when you want clean log output for debugging.
 ## Service mode (`--service`)
 
 ```
-python spotify-ad-mute.py --service [--images DIR] [--pycaw on|off] [--log FILE]
+python spotify-ad-mute.py --service [--images DIR] [--pycaw on|off] [--log FILE] [--no-autoplay]
 ```
 
 Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds it:
@@ -66,7 +66,8 @@ Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds 
 - launches Spotify if it is not running (the install is found through the registry, then `%APPDATA%\Spotify`),
 - keeps the Spotify window maximized,
 - checks that the volume icon is visible and, if not, brings the window to the front and then hovers the player bar,
-- resets the muter state when Spotify restarts.
+- resets the muter state when Spotify restarts,
+- starts playback when Spotify (re)starts, if nothing is playing (it sends a *play* command to Spotify's window, not the play/pause key, so it never pauses music that is already playing and cannot reach another player).
 
 It needs a logged-on desktop session (auto-logon, no screen lock), because it reads the screen and moves the mouse.
 Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `--log` is given.
@@ -76,6 +77,7 @@ Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `-
 | `--images DIR` | Per-machine images: `DIR/volume/volume.png` and `mute.png` replace the repo's icons, `DIR/ads/*` are added to the ads |
 | `--pycaw on\|off` | Overrides `USE_PYCAW` for this run |
 | `--log FILE` | Log file |
+| `--no-autoplay` | Do not start playback when Spotify (re)starts |
 
 ---
 
@@ -186,7 +188,7 @@ Select **Diagnose** from the menu (requires `USE_MENU = True`), or set `DEBUG_LO
 - When using `USE_PYCAW = True`: the Spotify audio session must be active (producing sound) for pycaw to find it.
 - When using `USE_PYCAW = False`: Spotify's volume icon must be visible and unobstructed for click-based muting to work.
 - Service mode needs a logged-on, unlocked desktop (auto-logon, no screen saver): it reads the screen and moves the mouse. The service itself does not start the agent before a user logs in.
-- Service mode relaunches Spotify but does not press play: after a relaunch Spotify stays idle until someone starts playback.
+- Autoplay sends *play* up to 3 times after Spotify starts and gives up if no track title appears (for example when Spotify has nothing to resume). It will also resume music you paused on purpose whenever Spotify or the agent restarts.
 - Ad detection still uses images, which depend on resolution and DPI (use `--images` for per-machine images). The image scan used about a third of one CPU core on the test machine (Windows 10, 1920x1080).
 - Only the classic desktop install is supported (found through the registry, then `%APPDATA%\Spotify`), not the Microsoft Store version.
 - Do not run another ad muter at the same time: two muters clicking the same mute button cancel each other.
