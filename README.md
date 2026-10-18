@@ -185,6 +185,11 @@ Select **Diagnose** from the menu (requires `USE_MENU = True`), or set `DEBUG_LO
 - Reference images in `ads/` and `volume/` must match your screen resolution and Windows DPI scaling. Retake them if detection fails.
 - When using `USE_PYCAW = True`: the Spotify audio session must be active (producing sound) for pycaw to find it.
 - When using `USE_PYCAW = False`: Spotify's volume icon must be visible and unobstructed for click-based muting to work.
+- Service mode needs a logged-on, unlocked desktop (auto-logon, no screen saver): it reads the screen and moves the mouse. The service itself does not start the agent before a user logs in.
+- Service mode relaunches Spotify but does not press play: after a relaunch Spotify stays idle until someone starts playback.
+- Ad detection still uses images, which depend on resolution and DPI (use `--images` for per-machine images). The image scan used about a third of one CPU core on the test machine (Windows 10, 1920x1080).
+- Only the classic desktop install is supported (found through the registry, then `%APPDATA%\Spotify`), not the Microsoft Store version.
+- Do not run another ad muter at the same time: two muters clicking the same mute button cancel each other.
 
 ---
 
