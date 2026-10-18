@@ -5,8 +5,10 @@ Description: Decides when Spotify must be (re)launched. Pure logic plus a Window
 
 import csv
 import ctypes
+import os
 import subprocess
 import time
+from pathlib import Path
 from ctypes import wintypes
 
 
@@ -32,6 +34,36 @@ def spotify_probe() -> tuple[bool, int | None]:
 
     user32.EnumWindows(visit, 0)
     return True, (found[0] if found else None)
+
+
+def spotify_path(env=os.environ) -> Path:
+    """Classic desktop install location."""
+    return Path(env['APPDATA']) / 'Spotify' / 'Spotify.exe'
+
+
+def launch_spotify(path: Path | None = None):
+    """Start Spotify detached from this process. Run it in the user's session, not from a service."""
+    subprocess.Popen([str(path or spotify_path())], creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+
+
+# --- Maximized window ---
+
+def window_is_maximized(hwnd: int) -> bool:
+    user32 = ctypes.windll.user32
+    return bool(user32.IsZoomed(hwnd)) and not user32.IsIconic(hwnd)
+
+
+def show_window(hwnd: int, cmd: int):
+    ctypes.windll.user32.ShowWindow(hwnd, cmd)
+
+
+def ensure_maximized(hwnd: int, is_maximized=window_is_maximized, show=show_window) -> str:
+    """Return 'ok' or 'maximized'. SW_MAXIMIZE is idempotent and also restores a minimized window,
+    so no keys, focus or settle time are needed."""
+    if is_maximized(hwnd):
+        return 'ok'
+    show(hwnd, 3)  # SW_MAXIMIZE
+    return 'maximized'
 
 
 class Supervisor:
