@@ -91,6 +91,68 @@ def ensure_maximized(hwnd: int, is_maximized=window_is_maximized, show=show_wind
     return 'maximized'
 
 
+# --- Volume controls ---
+
+def bottom_center(rect) -> tuple[int, int]:
+    """A point inside the bottom player bar of a window rect (l, t, r, b)."""
+    return (rect[0] + rect[2]) // 2, rect[3] - 30
+
+
+def raise_window(hwnd: int):
+    """Un-minimize and bring the window to the foreground (the Alt tap lets it past the foreground lock)."""
+    user32 = ctypes.windll.user32
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE: a maximized window comes back maximized
+    user32.keybd_event(0x12, 0, 0, 0)
+    user32.keybd_event(0x12, 0, 2, 0)
+    user32.SetForegroundWindow(hwnd)
+
+
+def nudge_mouse(hwnd: int):
+    """Hover the player bar so Spotify shows controls that auto-hide."""
+    user32 = ctypes.windll.user32
+    r = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    x, y = bottom_center((r.left, r.top, r.right, r.bottom))
+    for dx in (0, 5, 0):
+        user32.SetCursorPos(x + dx, y)
+        time.sleep(0.1)
+
+
+class VolumeControlsGuard:
+    """tick(hwnd) returns 'visible' | 'no-window' | 'waiting' | 'raised' | 'nudged' | 'hidden'.
+
+    `is_visible` is the on-screen icon check (volume.png / mute.png found). When it fails, escalate one rung
+    per `cooldown` seconds: raise the window, then hover the player bar. After both, report 'hidden' so the
+    caller can log or alert, then start over. Seeing the controls resets the ladder.
+    """
+
+    def __init__(self, is_visible, raise_window=raise_window, nudge_mouse=nudge_mouse,
+                 now=time.monotonic, cooldown=10.0):
+        self._visible, self._now, self._cooldown = is_visible, now, cooldown
+        self._rungs = [('raised', raise_window), ('nudged', nudge_mouse)]
+        self._step = 0
+        self._last = None
+
+    def tick(self, hwnd) -> str:
+        if hwnd is None:
+            return 'no-window'
+        if self._visible():
+            self._step, self._last = 0, None
+            return 'visible'
+        now = self._now()
+        if self._last is not None and now - self._last < self._cooldown:
+            return 'waiting'
+        self._last = now
+        if self._step >= len(self._rungs):
+            self._step = 0
+            return 'hidden'
+        name, action = self._rungs[self._step]
+        action(hwnd)
+        self._step += 1
+        return name
+
+
 class Supervisor:
     """tick() returns 'ok' | 'starting' | 'waiting' | 'launched'.
 
