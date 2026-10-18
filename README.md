@@ -55,6 +55,30 @@ Recommended when you want clean log output for debugging.
 
 ---
 
+## Service mode (`--service`)
+
+```
+python spotify-ad-mute.py --service [--images DIR] [--pycaw on|off] [--log FILE]
+```
+
+Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds it:
+
+- launches Spotify if it is not running (the install is found through the registry, then `%APPDATA%\Spotify`),
+- keeps the Spotify window maximized,
+- checks that the volume icon is visible and, if not, brings the window to the front and then hovers the player bar,
+- resets the muter state when Spotify restarts.
+
+It needs a logged-on desktop session (auto-logon, no screen lock), because it reads the screen and moves the mouse.
+Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mutegent.log` unless `--log` is given.
+
+| Option | Meaning |
+|---|---|
+| `--images DIR` | Per-machine images: `DIR/volume/volume.png` and `mute.png` replace the repo's icons, `DIR/ads/*` are added to the ads |
+| `--pycaw on\|off` | Overrides `USE_PYCAW` for this run |
+| `--log FILE` | Log file |
+
+---
+
 ## Configuration
 
 Open `spotify-ad-mute.py` and adjust these flags near the top of the file:

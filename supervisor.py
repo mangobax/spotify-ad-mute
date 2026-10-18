@@ -167,6 +167,7 @@ class Supervisor:
         self._probe, self._launch, self._now = probe, launch, now
         self._grace, self._base, self._max = startup_grace, backoff_base, backoff_max
         self.generation = 0
+        self.hwnd = None     # main window seen by the last tick()
         self._ready = False
         self._attempts = 0
         self._last_launch = None
@@ -174,6 +175,7 @@ class Supervisor:
 
     def tick(self) -> str:
         alive, hwnd = self._probe()
+        self.hwnd = hwnd
         now = self._now()
         if hwnd is not None:
             if not self._ready:
@@ -192,3 +194,42 @@ class Supervisor:
         self._attempts += 1
         self._last_launch = self._since = now
         return 'launched'
+
+
+class Agent:
+    """One pass of the keep-alive loop, called every few seconds from the interactive session.
+
+    Relaunches Spotify when needed (via the Supervisor), keeps the window maximized and the volume controls
+    visible, and tells the caller when Spotify came back (`on_new_generation`) so it can reset its own state.
+    A failing part is logged and skipped: the loop must outlive any single error.
+    """
+
+    def __init__(self, supervisor, maximize, controls, on_new_generation, log):
+        self._sup, self._maximize, self._controls = supervisor, maximize, controls
+        self._on_new_generation, self._log = on_new_generation, log
+        self._generation = 0
+        self._last_status = None
+
+    def _run(self, name, fn, *args):
+        try:
+            return fn(*args)
+        except Exception:
+            self._log.exception('%s failed', name)
+
+    def step(self) -> str:
+        status = self._run('supervisor', self._sup.tick) or 'error'
+        if status != self._last_status:
+            self._log.info('Spotify: %s', status)
+            self._last_status = status
+        if status != 'ok':
+            return status
+        hwnd = self._sup.hwnd
+        if self._sup.generation != self._generation:
+            self._generation = self._sup.generation
+            self._run('on_new_generation', self._on_new_generation, self._generation)
+        if self._run('maximize', self._maximize, hwnd) == 'maximized':
+            self._log.info('Window was not maximized: maximized it')
+        result = self._run('controls', self._controls, hwnd)
+        if result not in (None, 'visible'):
+            self._log.warning('Volume controls: %s', result)
+        return status

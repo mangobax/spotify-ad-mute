@@ -6,15 +6,19 @@ Version: 27-Feb-2026
 """
 
 try:
+    import argparse
     import os
     import sys
     import time
     import logging
+    from logging.handlers import RotatingFileHandler
     from pathlib import Path
     from threading import Thread
     from pyautogui import locateCenterOnScreen, click as pyautogui_click
     from pick import pick
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+    from supervisor import (Agent, Supervisor, VolumeControlsGuard, ensure_maximized,
+                            launch_spotify)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
     raise details
@@ -65,6 +69,19 @@ def collect_ad_images(folder: Path) -> list[Path]:
 image_volume: Path = resource_path('volume/volume.png')
 image_mute:   Path = resource_path('volume/mute.png')
 image_ads:   list[Path] = collect_ad_images(resource_path('ads'))
+
+
+def configure_images(extra: Path):
+    """Per-machine images: extra/volume/*.png replace the repo's volume icons, extra/ads/* are added to the ads.
+
+    Reference images depend on the screen resolution and DPI, so each machine can keep its own set.
+    """
+    global image_volume, image_mute, image_ads
+    for name in ('volume', 'mute'):
+        if (extra / 'volume' / f'{name}.png').exists():
+            globals()[f'image_{name}'] = extra / 'volume' / f'{name}.png'
+    if (extra / 'ads').is_dir():
+        image_ads = image_ads + collect_ad_images(extra / 'ads')
 
 
 # --- Audio control ---
@@ -233,6 +250,10 @@ class MuteAd(Thread):
                         self._muted = False
                 time.sleep(self.SLEEP_AD_IDLE)
 
+    def reset(self):
+        """Forget the mute state (Spotify restarted: a new process starts unmuted)."""
+        self._muted = False
+
     def stop(self):
         """Signal the thread to exit cleanly, and unmute if needed."""
         self.running = False
@@ -265,14 +286,61 @@ def show_menu(mute_ad: MuteAd) -> bool:
     return False
 
 
+# --- Service mode ---
+
+SERVICE_TICK = 5.0   # seconds between keep-alive passes
+
+
+def setup_file_logging(path: Path):
+    """Rotating log file (3 x 1 MB) with dates, for runs without a console."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logging.getLogger().addHandler(handler)
+
+
+def run_service(mute_ad: MuteAd):
+    """Keep Spotify running, maximized, with visible volume controls, while the muter watches for ads."""
+    agent = Agent(Supervisor(launch=launch_spotify), maximize=ensure_maximized,
+                  controls=VolumeControlsGuard(lambda: is_muted_on_screen() is not None).tick,
+                  on_new_generation=lambda gen: mute_ad.reset(), log=log)
+    mute_ad.running = True
+    log.info("Service mode: supervising Spotify every %.0f s (mute method: %s)", SERVICE_TICK,
+             "pycaw" if USE_PYCAW else "UI click")
+    while True:
+        agent.step()
+        time.sleep(SERVICE_TICK)
+
+
 # --- Entry point ---
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Mute Spotify ads; optionally keep Spotify running.")
+    parser.add_argument('--service', action='store_true',
+                        help="no menu: launch/keep Spotify maximized with visible volume controls and mute ads")
+    parser.add_argument('--images', type=Path, help="per-machine folder with volume/ and ads/ images")
+    parser.add_argument('--pycaw', choices=('on', 'off'), help="override USE_PYCAW")
+    parser.add_argument('--log', type=Path, help="log file (service default: spotify-ad-mute/agent.log under LOCALAPPDATA)")
+    return parser.parse_args(argv)
+
+
 def main():
+    global USE_PYCAW
+    args = parse_args()
+    if args.pycaw:
+        USE_PYCAW = args.pycaw == 'on'
+    if args.images:
+        configure_images(args.images)
+    if args.log or args.service:
+        setup_file_logging(args.log or Path(os.environ['LOCALAPPDATA']) / 'spotify-ad-mute' / 'agent.log')
+
     mute_ad = MuteAd()
     mute_ad.start()
 
     try:
-        if USE_MENU:
+        if args.service:
+            run_service(mute_ad)
+        elif USE_MENU:
             os.system('mode con cols=30 lines=7')
             while True:
                 if show_menu(mute_ad):
