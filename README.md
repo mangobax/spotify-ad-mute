@@ -69,7 +69,7 @@ Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds 
 - resets the muter state when Spotify restarts.
 
 It needs a logged-on desktop session (auto-logon, no screen lock), because it reads the screen and moves the mouse.
-Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mutegent.log` unless `--log` is given.
+Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `--log` is given.
 
 | Option | Meaning |
 |---|---|
