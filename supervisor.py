@@ -207,8 +207,21 @@ class AutoPlay:
         return 'played'
 
 
+def window_is_hung(hwnd: int) -> bool:
+    """True when the window's thread has not processed messages for several seconds (Task Manager: 'Not responding')."""
+    return bool(ctypes.windll.user32.IsHungAppWindow(hwnd))
+
+
+def kill_spotify():
+    """Force-close every Spotify.exe process of this user (the main one and its helpers)."""
+    subprocess.run(['taskkill', '/F', '/T', '/IM', 'Spotify.exe'], capture_output=True)
+
+
 class Supervisor:
-    """tick() returns 'ok' | 'starting' | 'waiting' | 'launched'.
+    """tick() returns 'ok' | 'starting' | 'waiting' | 'launched' | 'hung' | 'killed'.
+
+    A window that stops responding ('hung') for `hang_grace` seconds gets Spotify killed ('killed'); the next
+    tick relaunches it. Hang detection is off unless both is_hung and kill are given.
 
     Spotify counts as ready only when its window exists. A process without a window (tray, hung, still
     loading) gets `startup_grace` seconds, then launch() is called again: Spotify.exe raises the window
@@ -217,9 +230,12 @@ class Supervisor:
     """
 
     def __init__(self, probe=spotify_probe, launch=None, now=time.monotonic,
-                 startup_grace=30.0, backoff_base=5.0, backoff_max=300.0):
+                 startup_grace=30.0, backoff_base=5.0, backoff_max=300.0,
+                 is_hung=None, kill=None, hang_grace=30.0):
         self._probe, self._launch, self._now = probe, launch, now
         self._grace, self._base, self._max = startup_grace, backoff_base, backoff_max
+        self._is_hung, self._kill, self._hang_grace = is_hung, kill, hang_grace
+        self._hung_since = None
         self.generation = 0
         self.hwnd = None     # main window seen by the last tick()
         self._ready = False
@@ -231,6 +247,17 @@ class Supervisor:
         alive, hwnd = self._probe()
         self.hwnd = hwnd
         now = self._now()
+        if hwnd is not None and self._is_hung and self._kill and self._is_hung(hwnd):
+            if self._hung_since is None:
+                self._hung_since = now
+            if now - self._hung_since < self._hang_grace:
+                return 'hung'
+            self._hung_since = None
+            self._ready = False
+            self.hwnd = None
+            self._kill()
+            return 'killed'
+        self._hung_since = None
         if hwnd is not None:
             if not self._ready:
                 self._ready = True

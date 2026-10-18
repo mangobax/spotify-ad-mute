@@ -18,7 +18,7 @@ try:
     from pick import pick
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
     from supervisor import (Agent, AutoPlay, Supervisor, VolumeControlsGuard, ensure_maximized,
-                            launch_spotify)
+                            kill_spotify, launch_spotify, window_is_hung)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
     raise details
@@ -302,9 +302,10 @@ def setup_file_logging(path: Path):
 def run_service(mute_ad: MuteAd, autoplay: bool = True):
     """Keep Spotify running, maximized, with visible volume controls, while the muter watches for ads.
 
-    With autoplay, playback is started whenever Spotify (re)starts.
+    With autoplay, playback is started whenever Spotify (re)starts. A Spotify window that stays "not responding"
+    is killed and relaunched.
     """
-    agent = Agent(Supervisor(launch=launch_spotify), maximize=ensure_maximized,
+    agent = Agent(Supervisor(launch=launch_spotify, is_hung=window_is_hung, kill=kill_spotify), maximize=ensure_maximized,
                   controls=VolumeControlsGuard(lambda: is_muted_on_screen() is not None).tick,
                   on_new_generation=lambda gen: mute_ad.reset(), log=log,
                   autoplay=AutoPlay() if autoplay else None)
