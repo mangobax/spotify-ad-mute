@@ -58,7 +58,7 @@ Recommended when you want clean log output for debugging.
 ## Service mode (`--service`)
 
 ```
-python spotify-ad-mute.py --service [--images DIR] [--pycaw on|off] [--log FILE] [--no-autoplay]
+python spotify-ad-mute.py --service [--images DIR] [--pycaw on|off] [--log FILE] [--no-autoplay] [--detect both|title|images]
 ```
 
 Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds it:
@@ -78,6 +78,7 @@ Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `-
 | `--pycaw on\|off` | Overrides `USE_PYCAW` for this run |
 | `--log FILE` | Log file |
 | `--no-autoplay` | Do not start playback when Spotify (re)starts |
+| `--detect MODE` | Ad detection: `title` = window title + audio state (no screen scan), `images` = screen images only, `both` (default) = title and audio first, images only when those cannot decide |
 
 ---
 
@@ -132,7 +133,7 @@ USE_PYCAW = True
 
 ## How it works
 
-1. **Ad detection** — Every 5 seconds during normal playback (0.5 s during an ad), the script scans the screen for images stored in the `ads/` folder. When a match is found, it means an ad is playing.
+1. **Ad detection** — Unless `--detect images` is used, the window title decides first: `Artist - Song` means a track is playing (no ad, no scan); any other title is an ad while Spotify is producing sound or after the muter has silenced it, which keeps the ad break muted until a track title returns. A silent, unmuted player with such a title is a pause, and only the image scan (when enabled) can tell. Every 5 seconds during normal playback (0.5 s during an ad), the script scans the screen for images stored in the `ads/` folder. When a match is found, it means an ad is playing.
 2. **Mute control** — Depending on `USE_PYCAW`:
    - `True`: The Windows Core Audio API (`pycaw`) mutes/unmutes the Spotify process directly — no mouse interaction required.
    - `False`: The script locates Spotify's volume icon on screen and clicks it to toggle mute — works across remote desktop sessions where pycaw cannot reach the remote audio stack.
@@ -189,7 +190,7 @@ Select **Diagnose** from the menu (requires `USE_MENU = True`), or set `DEBUG_LO
 - When using `USE_PYCAW = False`: Spotify's volume icon must be visible and unobstructed for click-based muting to work.
 - Service mode needs a logged-on, unlocked desktop (auto-logon, no screen saver): it reads the screen and moves the mouse. The service itself does not start the agent before a user logs in.
 - Autoplay sends *play* up to 3 times after Spotify starts and gives up if no track title appears (for example when Spotify has nothing to resume). It will also resume music you paused on purpose whenever Spotify or the agent restarts.
-- Ad detection still uses images, which depend on resolution and DPI (use `--images` for per-machine images). The image scan used about a third of one CPU core on the test machine (Windows 10, 1920x1080).
+- With `--detect title` ad detection does not use images. In the default `both` mode images remain a fallback, and they depend on resolution and DPI (use `--images` for per-machine images); the image scan used about a third of one CPU core on the test machine (Windows 10, 1920x1080), but now only runs when the title and audio cannot decide.
 - Only the classic desktop install is supported (found through the registry, then `%APPDATA%\Spotify`), not the Microsoft Store version.
 - Do not run another ad muter at the same time: two muters clicking the same mute button cancel each other.
 
