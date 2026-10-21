@@ -120,32 +120,52 @@ def nudge_mouse(hwnd: int):
 
 
 class VolumeControlsGuard:
-    """tick(hwnd) returns 'visible' | 'no-window' | 'waiting' | 'raised' | 'nudged' | 'hidden'.
+    """tick(hwnd) returns 'visible' | 'no-window' | 'waiting' | 'raised' | 'nudged' | 'hidden' | 'stuck'.
 
     `is_visible` is the on-screen icon check (volume.png / mute.png found). When it fails, escalate one rung
-    per `cooldown` seconds: raise the window, then hover the player bar. After both, report 'hidden' so the
-    caller can log or alert, then start over. Seeing the controls resets the ladder.
+    per cooldown: raise the window, then hover the player bar. After both, report 'hidden' so the caller can
+    log or alert, then start over with the cooldown doubled (up to `max_cooldown`), so a window that never
+    shows its controls is poked less and less instead of every few seconds forever. Seeing the controls
+    resets the ladder and the cooldown.
+
+    Controls missing for `stuck_after` seconds in a row report 'stuck' once: the window is blank or frozen
+    and the caller should restart Spotify. `reset()` forgets everything (after sleep or a screen unlock the
+    icons are not there yet, and that is not the window's fault).
     """
 
     def __init__(self, is_visible, raise_window=raise_window, nudge_mouse=nudge_mouse,
-                 now=time.monotonic, cooldown=10.0):
-        self._visible, self._now, self._cooldown = is_visible, now, cooldown
+                 now=time.monotonic, cooldown=10.0, max_cooldown=300.0, stuck_after=180.0):
+        self._visible, self._now = is_visible, now
+        self._base, self._max, self._stuck_after = cooldown, max_cooldown, stuck_after
         self._rungs = [('raised', raise_window), ('nudged', nudge_mouse)]
+        self.reset()
+
+    def reset(self):
         self._step = 0
         self._last = None
+        self._cooldown = self._base
+        self._missing_since = None
+        self._stuck_reported = False
 
     def tick(self, hwnd) -> str:
         if hwnd is None:
+            self.reset()
             return 'no-window'
         if self._visible():
-            self._step, self._last = 0, None
+            self.reset()
             return 'visible'
         now = self._now()
+        if self._missing_since is None:
+            self._missing_since = now
+        if not self._stuck_reported and now - self._missing_since >= self._stuck_after:
+            self._stuck_reported = True
+            return 'stuck'
         if self._last is not None and now - self._last < self._cooldown:
             return 'waiting'
         self._last = now
         if self._step >= len(self._rungs):
             self._step = 0
+            self._cooldown = min(self._cooldown * 2, self._max)
             return 'hidden'
         name, action = self._rungs[self._step]
         action(hwnd)
@@ -227,6 +247,27 @@ def kill_spotify():
     subprocess.run(['taskkill', '/F', '/T', '/IM', 'Spotify.exe'], capture_output=True)
 
 
+def logonui_in_session(tasklist_csv: str, session_id: int) -> bool:
+    """True when a `tasklist /FO CSV /NH` listing has a LogonUI.exe row in session_id."""
+    for row in csv.reader(tasklist_csv.splitlines()):
+        if len(row) > 3 and row[0].lower() == 'logonui.exe' and row[3] == str(session_id):
+            return True
+    return False
+
+
+def session_locked() -> bool:
+    """True while the lock screen is up: no icons can be seen or clicked then.
+
+    OpenInputDesktop does not tell: on Windows 10 the lock screen runs on the Default desktop of the user's own
+    session, so it opens fine. LogonUI.exe running in our session is the signal.
+    """
+    session_id = wintypes.DWORD()
+    ctypes.windll.kernel32.ProcessIdToSessionId(ctypes.windll.kernel32.GetCurrentProcessId(), ctypes.byref(session_id))
+    out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq LogonUI.exe', '/FO', 'CSV', '/NH'],
+                         capture_output=True, text=True).stdout
+    return logonui_in_session(out, session_id.value)
+
+
 class Supervisor:
     """tick() returns 'ok' | 'starting' | 'waiting' | 'launched' | 'hung' | 'killed'.
 
@@ -246,6 +287,7 @@ class Supervisor:
         self._grace, self._base, self._max = startup_grace, backoff_base, backoff_max
         self._is_hung, self._kill, self._hang_grace = is_hung, kill, hang_grace
         self._hung_since = None
+        self._hold_until = 0.0
         self.generation = 0
         self.hwnd = None     # main window seen by the last tick()
         self._ready = False
@@ -253,13 +295,27 @@ class Supervisor:
         self._last_launch = None
         self._since = None   # start of the current not-ready episode, or of the last launch
 
+    def resumed(self, hold: float = 60.0):
+        """The machine woke from sleep or the screen was unlocked: a window may answer late for a while.
+        Forget any hang seen before and start counting the next one after `hold` seconds."""
+        self._hung_since = None
+        self._hold_until = self._now() + hold
+
+    def restart(self):
+        """Kill Spotify on purpose (blank or frozen window that still answers messages); the next tick relaunches."""
+        if not self._kill:
+            return
+        self._ready = False
+        self.hwnd = None
+        self._kill()
+
     def tick(self) -> str:
         alive, hwnd = self._probe()
         self.hwnd = hwnd
         now = self._now()
         if hwnd is not None and self._is_hung and self._kill and self._is_hung(hwnd):
             if self._hung_since is None:
-                self._hung_since = now
+                self._hung_since = max(now, self._hold_until)
             if now - self._hung_since < self._hang_grace:
                 return 'hung'
             self._hung_since = None
@@ -295,12 +351,18 @@ class Agent:
     A failing part is logged and skipped: the loop must outlive any single error.
     """
 
-    def __init__(self, supervisor, maximize, controls, on_new_generation, log, autoplay=None):
+    def __init__(self, supervisor, maximize, controls, on_new_generation, log, autoplay=None,
+                 is_locked=lambda: False, now=time.time, on_resume=None, resume_gap=30.0, max_restarts=3):
         self._sup, self._maximize, self._controls = supervisor, maximize, controls
         self._autoplay = autoplay
         self._on_new_generation, self._log = on_new_generation, log
+        self._is_locked, self._now, self._on_resume = is_locked, now, on_resume
+        self._resume_gap, self._max_restarts = resume_gap, max_restarts
         self._generation = 0
         self._last_status = None
+        self._last_step = None
+        self._locked = False
+        self._restarts = 0
 
     def _run(self, name, fn, *args):
         try:
@@ -308,13 +370,31 @@ class Agent:
         except Exception:
             self._log.exception('%s failed', name)
 
+    def _resumed(self, why):
+        self._log.info('%s: guards reset', why)
+        if self._on_resume:
+            self._run('on_resume', self._on_resume)
+
     def step(self) -> str:
+        # Wall clock, not monotonic: it keeps counting while the laptop sleeps, so a long gap means a resume.
+        now = self._now()
+        if self._last_step is not None and now - self._last_step > self._resume_gap:
+            self._resumed('Resumed after %.0f s' % (now - self._last_step))
+        self._last_step = now
         status = self._run('supervisor', self._sup.tick) or 'error'
         if status != self._last_status:
             self._log.info('Spotify: %s', status)
             self._last_status = status
         if status != 'ok':
             return status
+        locked = bool(self._run('is_locked', self._is_locked))
+        if locked != self._locked:
+            self._locked = locked
+            self._log.info('Screen %s', 'locked' if locked else 'unlocked')
+            if not locked:
+                self._resumed('Unlocked')
+        if locked:
+            return 'locked'
         hwnd = self._sup.hwnd
         if self._sup.generation != self._generation:
             self._generation = self._sup.generation
@@ -324,7 +404,17 @@ class Agent:
         if self._run('maximize', self._maximize, hwnd) == 'maximized':
             self._log.info('Window was not maximized: maximized it')
         result = self._run('controls', self._controls, hwnd)
-        if result not in (None, 'visible'):
+        if result == 'visible':
+            self._restarts = 0
+        elif result == 'stuck':
+            if self._restarts < self._max_restarts:
+                self._restarts += 1
+                self._log.warning('Volume controls missing for too long: restarting Spotify (%d/%d)',
+                                  self._restarts, self._max_restarts)
+                self._run('restart', self._sup.restart)
+                return 'restarting'
+            self._log.error('Volume controls still missing after %d restarts: leaving Spotify alone', self._restarts)
+        elif result is not None:
             self._log.warning('Volume controls: %s', result)
         if self._autoplay:
             played = self._run('autoplay', self._autoplay.tick, hwnd)

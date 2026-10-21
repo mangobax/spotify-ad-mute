@@ -19,7 +19,8 @@ try:
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
     from ad_detect import AdDetector
     from supervisor import (Agent, AutoPlay, Supervisor, VolumeControlsGuard, ensure_maximized,
-                            kill_spotify, launch_spotify, spotify_probe, window_is_hung, window_title)
+                            kill_spotify, launch_spotify, session_locked, spotify_probe, window_is_hung,
+                            window_title)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
     raise details
@@ -313,12 +314,24 @@ def run_service(mute_ad: MuteAd, autoplay: bool = True):
     """Keep Spotify running, maximized, with visible volume controls, while the muter watches for ads.
 
     With autoplay, playback is started whenever Spotify (re)starts. A Spotify window that stays "not responding"
-    is killed and relaunched.
+    is killed and relaunched, and so is one whose volume controls stay missing for minutes. Nothing is touched
+    while the screen is locked; after a sleep or an unlock the watchdog starts counting from zero, so closing and
+    opening a laptop lid continues the session where it was.
     """
-    agent = Agent(Supervisor(launch=launch_spotify, is_hung=window_is_hung, kill=kill_spotify), maximize=ensure_maximized,
-                  controls=VolumeControlsGuard(lambda: is_muted_on_screen() is not None).tick,
-                  on_new_generation=lambda gen: mute_ad.reset(), log=log,
-                  autoplay=AutoPlay() if autoplay else None)
+    supervisor = Supervisor(launch=launch_spotify, is_hung=window_is_hung, kill=kill_spotify)
+    guard = VolumeControlsGuard(lambda: is_muted_on_screen() is not None)
+
+    def on_resume():
+        guard.reset()
+        supervisor.resumed()
+
+    def on_new_generation(gen):
+        mute_ad.reset()
+        guard.reset()   # the Agent does not tick the guard while Spotify has no window, so it never sees 'no-window'
+
+    agent = Agent(supervisor, maximize=ensure_maximized, controls=guard.tick,
+                  on_new_generation=on_new_generation, log=log,
+                  autoplay=AutoPlay() if autoplay else None, is_locked=session_locked, on_resume=on_resume)
     mute_ad.running = True
     log.info("Service mode: supervising Spotify every %.0f s (mute method: %s)", SERVICE_TICK,
              "pycaw" if USE_PYCAW else "UI click")
