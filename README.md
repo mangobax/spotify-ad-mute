@@ -65,11 +65,13 @@ Runs without a menu and keeps Spotify healthy while muting ads. Every 5 seconds 
 
 - launches Spotify if it is not running (the install is found through the registry, then `%APPDATA%\Spotify`),
 - keeps the Spotify window maximized,
-- checks that the volume icon is visible and, if not, brings the window to the front and then hovers the player bar,
+- checks that the volume icon is visible and, if not, brings the window to the front and then hovers the player bar. The retries back off (10 s, then 20 s, 40 s and so on up to 5 minutes) so a window that never shows its controls is not poked every few seconds,
+- restarts Spotify when the volume icon has been missing for 3 minutes in a row (a blank or crashed UI, for example "Something went wrong", still answers Windows messages, so the "not responding" check cannot see it). It does this at most 3 times until the icon is seen again, so a screen where the icon images do not match cannot cause an endless restart loop,
+- does nothing while the screen is locked, and after a sleep or an unlock it starts its timers again from zero, so closing and reopening a laptop lid continues the session where it left off (Spotify is not restarted and playback is not touched),
 - resets the muter state when Spotify restarts,
 - starts playback when Spotify (re)starts, if nothing is playing (it sends a *play* command to Spotify's window, not the play/pause key, so it never pauses music that is already playing and cannot reach another player).
 
-It needs a logged-on desktop session (auto-logon, no screen lock), because it reads the screen and moves the mouse.
+It needs a logged-on desktop session, because it reads the screen and moves the mouse. While the screen is locked it waits (see above); ads that start during a lock are not muted by the click method.
 Logs go to a rotating file, `%LOCALAPPDATA%\spotify-ad-mute\agent.log` unless `--log` is given.
 
 | Option | Meaning |
@@ -188,7 +190,8 @@ Select **Diagnose** from the menu (requires `USE_MENU = True`), or set `DEBUG_LO
 - Reference images in `ads/` and `volume/` must match your screen resolution and Windows DPI scaling. Retake them if detection fails.
 - When using `USE_PYCAW = True`: the Spotify audio session must be active (producing sound) for pycaw to find it.
 - When using `USE_PYCAW = False`: Spotify's volume icon must be visible and unobstructed for click-based muting to work.
-- Service mode needs a logged-on, unlocked desktop (auto-logon, no screen saver): it reads the screen and moves the mouse. The service itself does not start the agent before a user logs in.
+- Service mode needs a logged-on desktop (auto-logon helps after a reboot): it reads the screen and moves the mouse, and it pauses while the screen is locked. The service itself does not start the agent before a user logs in.
+- The 3-minute "controls missing" restart assumes the icon images match your screen. If they do not (see `--images`), Spotify is restarted up to 3 times before the agent leaves it alone, which interrupts the music.
 - Autoplay sends *play* up to 3 times after Spotify starts and gives up if no track title appears (for example when Spotify has nothing to resume). It will also resume music you paused on purpose whenever Spotify or the agent restarts.
 - With `--detect title` ad detection does not use images. In the default `both` mode images remain a fallback, and they depend on resolution and DPI (use `--images` for per-machine images); the image scan used about a third of one CPU core on the test machine (Windows 10, 1920x1080), but now only runs when the title and audio cannot decide.
 - Only the classic desktop install is supported (found through the registry, then `%APPDATA%\Spotify`), not the Microsoft Store version.
