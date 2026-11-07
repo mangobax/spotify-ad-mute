@@ -139,7 +139,7 @@ USE_PYCAW = True
 2. **Mute control** — Depending on `USE_PYCAW`:
    - `True`: The Windows Core Audio API (`pycaw`) mutes/unmutes the Spotify process directly — no mouse interaction required.
    - `False`: The script locates Spotify's volume icon on screen and clicks it to toggle mute — works across remote desktop sessions where pycaw cannot reach the remote audio stack.
-3. **Mute state sync** — Each cycle checks the `volume/` images to read Spotify's on-screen volume icon state, keeping internal state in sync even if the user mutes manually.
+3. **Mute state sync** — Each cycle checks the `volume/` images to read Spotify's on-screen volume icon state, keeping internal state in sync even if the user mutes manually. The `volume/` images are searched only in the player bar's volume corner (the right 40% of the Spotify window, in its bottom 120 px), so a mute icon drawn by an ad elsewhere on the screen is never clicked or mistaken for the player's. If the icon is not found there but a full-screen scan finds it elsewhere, a warning is logged (at most once per 30 s per icon) with its coordinates and the region. The `ads/` images are still searched on the whole screen.
 
 ---
 
@@ -187,6 +187,7 @@ Select **Diagnose** from the menu (requires `USE_MENU = True`), or set `DEBUG_LO
 ## Known limitations
 
 - Spotify must be on the main screen and fully visible (not minimised or covered).
+- The volume/mute icon must be in the player bar's volume corner (right 40% of the window, bottom 120 px). A different Spotify layout puts it outside the search region: the log then shows `matched outside the volume region ... ignored` with the coordinates.
 - Reference images in `ads/` and `volume/` must match your screen resolution and Windows DPI scaling. Retake them if detection fails.
 - When using `USE_PYCAW = True`: the Spotify audio session must be active (producing sound) for pycaw to find it.
 - When using `USE_PYCAW = False`: Spotify's volume icon must be visible and unobstructed for click-based muting to work.
