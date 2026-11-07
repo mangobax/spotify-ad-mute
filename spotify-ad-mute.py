@@ -14,13 +14,14 @@ try:
     from logging.handlers import RotatingFileHandler
     from pathlib import Path
     from threading import Thread
-    from pyautogui import locateCenterOnScreen, click as pyautogui_click
+    import ctypes
+    from pyautogui import locateCenterOnScreen, click as pyautogui_click, size as pyautogui_size
     from pick import pick
     from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
     from ad_detect import AdDetector
-    from supervisor import (Agent, AutoPlay, Supervisor, VolumeControlsGuard, ensure_maximized,
-                            kill_spotify, launch_spotify, session_locked, spotify_probe, window_is_hung,
-                            window_title)
+    from supervisor import (Agent, AutoPlay, IconFinder, Supervisor, VolumeControlsGuard, ensure_maximized,
+                            kill_spotify, launch_spotify, session_locked, spotify_probe, volume_region,
+                            window_is_hung, window_rect, window_title)
 except ImportError as details:
     print("-E- Couldn't import module, try pip install 'module'")
     raise details
@@ -114,7 +115,7 @@ def _mute_via_click(muted: bool) -> bool:
     # If we want to unmute, Spotify must currently be muted — look for mute icon.
     target_image = image_volume if muted else image_mute
     target_label = "volume" if muted else "mute"
-    pos = locate_image(target_image)
+    pos = icon_finder.find(target_image)
     if pos is not None:
         pyautogui_click(x=pos[0], y=pos[1], clicks=1, button='left')
         log.info("Spotify %s (clicked %s icon at %s)", "muted" if muted else "unmuted", target_label, pos)
@@ -133,24 +134,42 @@ def set_spotify_mute(muted: bool) -> bool:
 
 # --- Screen detection ---
 
-def locate_image(image: Path):
-    """Locate an image on screen. Returns center (x, y) or None."""
+def locate_image(image: Path, region=None):
+    """Locate an image on screen (inside region = (left, top, width, height) when given).
+    Returns center (x, y) or None."""
     try:
-        return locateCenterOnScreen(str(image), grayscale=True, confidence=0.9)
+        return locateCenterOnScreen(str(image), region=region, grayscale=True, confidence=0.9)
     except Exception as exc:
         log.debug("locate_image failed for '%s': %s", image.name, exc)
         return None
 
 
+_spotify_window = {'hwnd': None, 'at': -1e9}   # window handle cached for 10 s: finding it spawns tasklist
+
+
+def spotify_icon_region():
+    """Where Spotify's volume/mute icon can be, from the current Spotify window (see supervisor.volume_region)."""
+    now = time.monotonic()
+    hwnd = _spotify_window['hwnd']
+    if not hwnd or not ctypes.windll.user32.IsWindow(hwnd) or now - _spotify_window['at'] > 10:
+        _, hwnd = spotify_probe()
+        _spotify_window.update(hwnd=hwnd, at=now)
+    return volume_region(window_rect(hwnd), tuple(pyautogui_size()))
+
+
+icon_finder = IconFinder(locate=locate_image, region=spotify_icon_region, log=log)
+
+
 def is_muted_on_screen() -> bool | None:
     """Check Spotify's on-screen mute state using the volume folder images.
 
+    Looks only in the player bar's volume corner (an ad can draw its own mute icon elsewhere).
     Returns True if mute icon is visible, False if volume icon is visible,
     or None if neither could be found (Spotify not visible / minimised).
     """
-    if locate_image(image_mute) is not None:
+    if icon_finder.find(image_mute) is not None:
         return True
-    if locate_image(image_volume) is not None:
+    if icon_finder.find(image_volume) is not None:
         return False
     return None  # Spotify UI not visible
 

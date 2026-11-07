@@ -98,6 +98,58 @@ def bottom_center(rect) -> tuple[int, int]:
     return (rect[0] + rect[2]) // 2, rect[3] - 30
 
 
+def window_rect(hwnd: int):
+    """(left, top, right, bottom) of a window in screen pixels, or None when it is gone."""
+    r = wintypes.RECT()
+    if not hwnd or not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r)):
+        return None
+    return r.left, r.top, r.right, r.bottom
+
+
+def volume_region(rect, screen, x_frac=0.6, window_height=120, fallback_height=130):
+    """(left, top, width, height) where Spotify's volume/mute icon can be: the right part of the bottom player bar.
+
+    `rect` is the Spotify window (l, t, r, b), clipped to the screen first (a maximized window overhangs it).
+    Without a usable window (None, minimized, off screen) the bottom-right of the screen is used.
+    """
+    sw, sh = screen
+    if rect:
+        l, t, r, b = max(rect[0], 0), max(rect[1], 0), min(rect[2], sw), min(rect[3], sh)
+        if r > l and b > t:
+            left, top = l + int((r - l) * x_frac), max(t, b - window_height)
+            return left, top, r - left, b - top
+    left = int(sw * x_frac)
+    return left, sh - fallback_height, sw - left, fallback_height
+
+
+class IconFinder:
+    """find(image) looks for Spotify's volume/mute icon only inside region(), so an icon drawn by an ad (a video
+    ad can have its own mute button) is never clicked or taken for the player's.
+
+    When nothing is found inside, one full-screen scan per `outside_every` seconds and image tells whether the
+    icon is somewhere else, and says so in the log (warning): a window layout the region does not cover, or an ad.
+    `locate(image, region)` returns the center (x, y) or None; region=None searches the whole screen.
+    """
+
+    def __init__(self, locate, region, log, now=time.monotonic, outside_every=30.0):
+        self._locate, self._region, self._log = locate, region, log
+        self._now, self._every = now, outside_every
+        self._last_outside = {}
+
+    def find(self, image):
+        region = self._region()
+        pos = self._locate(image, region)
+        if pos is not None:
+            return pos
+        name, now = getattr(image, 'name', image), self._now()
+        if name not in self._last_outside or now - self._last_outside[name] >= self._every:
+            self._last_outside[name] = now
+            other = self._locate(image, None)
+            if other is not None:
+                self._log.warning("'%s' matched outside the volume region at %s (region %s): ignored", name, other, region)
+        return None
+
+
 def raise_window(hwnd: int):
     """Un-minimize and bring the window to the foreground (the Alt tap lets it past the foreground lock)."""
     user32 = ctypes.windll.user32
